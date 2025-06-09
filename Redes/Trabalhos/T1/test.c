@@ -1,152 +1,164 @@
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <pthread.h>
 #include <arpa/inet.h>
+#include <sys/socket.h>
 #include <netinet/in.h>
+#include <unistd.h>
+#include <stdlib.h>
 #include <time.h>
 #include "gasStationProtocol.h"
 
-#define NUM_CLIENTS 1000
+#define NUM_CLIENTS 10
+#define REQUEST_PER_CLIENT 100
 
-typedef struct {
-    char ip[INET_ADDRSTRLEN];
-    int port;
-    int client_id;
-} ThreadArgs;
-
-// Função para enviar uma requisição e aguardar ACK/NAK
-void makeRequest(int sockfd, struct sockaddr *serverAddress, RequestMessage *msg)
+void sendRequest(int sockfd, struct sockaddr *serverAddress, RequestMessage *request)
 {
     socklen_t serverAdressLength = sizeof(*serverAddress);
-    AckNakMessage response;
-    static int idCounter = 0;
-
-    msg->requestId = __sync_fetch_and_add(&idCounter, 1); // ID único e thread-safe
-
+    AckNakMessage ackNakResponse;
+    static int requestId = 0;
+    request->requestId = requestId++;
     while (1)
     {
-        msg->errorFlag = simulateError(); // Recalcular erro a cada tentativa
-
-        if (sendto(sockfd, msg, sizeof(RequestMessage), 0, serverAddress, serverAdressLength) < 0)
+        request->errorFlag = simulateError();
+        if (sendto(sockfd, request, sizeof(RequestMessage), 0, serverAddress, serverAdressLength) < 0)
         {
-            perror("[W] Erro ao enviar");
-            continue;
+            logMessage(LOG_WARN, "[CLIENT] Erro ao enviar dados");
         }
-
-        if (recvfrom(sockfd, &response, sizeof(AckNakMessage), 0, serverAddress, &serverAdressLength) < 0)
+        else if (recvfrom(sockfd, &ackNakResponse, sizeof(AckNakMessage), 0, serverAddress, &serverAdressLength) < 0)
         {
-            perror("[W] Erro ao receber");
-            continue;
+            logMessage(LOG_WARN, "[CLIENT] Erro ao receber dados");
         }
-
-        if (response.requestId == msg->requestId)
+        else if (ackNakResponse.requestId == request->requestId)
         {
-            if (response.messageType == 'A')
+            if (ackNakResponse.messageType == 'A')
             {
-                printf("[Client %d] ACK recebido para mensagem %d\n", msg->requestId, msg->requestId);
-                fflush(stdout);
+                logMessage(LOG_SUCCESS, "[MSG id=%d] Mensagem recebida pelo server com sucesso", request->requestId);
                 return;
             }
-            if (response.messageType == 'N')
+            if (ackNakResponse.messageType == 'N')
             {
-                printf("[Client %d] NAK recebido para mensagem %d. Reenviando...\n", msg->requestId, msg->requestId);
-                fflush(stdout);
+                logMessage(LOG_WARN, "[MSG id=%d] Mensagem recebida pelo server com erro", request->requestId);
             }
         }
-        else
-        {
-            printf("[Client %d] Resposta com ID incorreto (esperado %d, recebido %d)\n", msg->requestId, msg->requestId, response.requestId);
-            fflush(stdout);
-        }
+        logMessage(LOG_INFO, "[MSG id=%d] Enviando novamente a mensangem", request->requestId);
+    }
+    return;
+}
+
+void getResponse(int sockfd, struct sockaddr *serverAddress, ResponseMessage *response)
+{
+    socklen_t serverAdressLength = sizeof(*serverAddress);
+
+    while (recvfrom(sockfd, response, sizeof(ResponseMessage), 0, serverAddress, &serverAdressLength) < 0)
+    {
+        logMessage(LOG_WARN, "[CLIENT] Erro ao receber dados");
+        logMessage(LOG_INFO, "[CLIENT] Esperando novamente uma mensangem");
+    }
+    return;
+}
+
+void printSearchResult(const RequestMessage *request, const ResponseMessage *response)
+{
+    if (response->minPrice == -1)
+    {
+        logMessage(LOG_INFO, "[MSG id=%d] Nenhum posto encontrado num raio de %d km a partir de (%lf, %lf) para combustível tipo %d",
+                   request->requestId, request->priceOrRadius, request->coordinates[0], request->coordinates[1], request->fuelType);
+    }
+    else
+    {
+        logMessage(LOG_INFO, "[MSG id=%d] Melhor posto encontrado para combustível tipo %d num raio de %d km:\n\tPreço: %d\n\tLocalização: (%lf, %lf)",
+                   request->requestId, request->fuelType, request->priceOrRadius, response->minPrice, response->coordinates[0], response->coordinates[1]);
     }
 }
 
-// Thread de cliente
-void *client_thread(void *arg)
+typedef struct
 {
-    ThreadArgs *args = (ThreadArgs *)arg;
     int sockfd;
-    struct sockaddr_in serverAddress;
+    struct sockaddr_in serverAddr;
+} TestArgs;
 
-    srand(time(NULL) + args->client_id * 1234); // Semente única
+void *threadTest(void *args)
+{
+    TestArgs test = *(TestArgs *)args;
+    RequestMessage request;
+    ResponseMessage response;
+    struct sockaddr_in serverAddr = test.serverAddr;
+    int sockfd = test.sockfd;
 
-    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0)
+    for (int i = 0; i < REQUEST_PER_CLIENT; i++)
     {
-        perror("[E] Erro ao criar socket");
-        free(arg);
-        return NULL;
+        request.messageType = (rand() % 2 == 0) ? 'D' : 'P'; // 'D' de dado ou 'P' de pesquisa
+        request.fuelType = rand() % 3;
+        request.priceOrRadius = rand() % 100;
+        request.coordinates[0] = (rand() % 1000) / 10.0;
+        request.coordinates[1] = (rand() % 1000) / 10.0;
+        request.errorFlag = simulateError();
+
+        logMessage(LOG_INFO, "[MSG id=%d] Mensagem enviada: %c %d %d %lf %lf",
+                   request.requestId, request.messageType, request.fuelType,
+                   request.priceOrRadius, request.coordinates[0], request.coordinates[1]);
+
+        sendRequest(sockfd, (struct sockaddr *)&serverAddr, &request);
+
+        if (request.messageType == 'P')
+        {
+            getResponse(sockfd, (struct sockaddr *)&serverAddr, &response);
+            printSearchResult(&request, &response);
+        }
     }
-
-    memset(&serverAddress, 0, sizeof(serverAddress));
-    serverAddress.sin_family = AF_INET;
-    serverAddress.sin_port = htons(args->port);
-    if (inet_pton(AF_INET, args->ip, &serverAddress.sin_addr) <= 0)
-    {
-        perror("[E] Endereço IP inválido");
-        close(sockfd);
-        free(arg);
-        return NULL;
-    }
-
-    // Gerar mensagem aleatória
-    RequestMessage msg;
-    msg.messageType = (rand() % 2 == 0) ? 'D' : 'P'; // 'D' de dado ou 'P' de pesquisa
-    msg.fuelType = rand() % 3;
-    msg.priceOrRadius = rand() % 100;
-    msg.coordinates[0] = (rand() % 1000) / 10.0;
-    msg.coordinates[1] = (rand() % 1000) / 10.0;
-    msg.errorFlag = simulateError();
-
-    printf("[Client %d] Enviando: %c %d %d %.2f %.2f (erro=%d)\n",
-           args->client_id, msg.messageType, msg.fuelType,
-           msg.priceOrRadius, msg.coordinates[0], msg.coordinates[1], msg.errorFlag);
-    fflush(stdout);
-
-    makeRequest(sockfd, (struct sockaddr *)&serverAddress, &msg);
-
-    close(sockfd);
-    free(arg);
     return NULL;
 }
 
-// Programa principal
 int main(int argc, char **argv)
 {
+    srand(time(NULL));
+
     if (argc != 3)
     {
-        printf("Uso: %s <ip_do_servidor> <porta>\n", argv[0]);
-        return EXIT_FAILURE;
+        logMessage(LOG_ERROR, "[USO] Uso: %s <endereco_ip> <porta>", argv[0]);
+        exit(EXIT_FAILURE);
     }
 
-    char *ip = argv[1];
     int port = atoi(argv[2]);
+    if (port < 0 || port > 65535)
+    {
+        logMessage(LOG_ERROR, "[USO] Porta inválida: %d", port);
+        exit(EXIT_FAILURE);
+    }
 
+    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd < 0)
+    {
+        logMessage(LOG_ERROR, "[SOCKET] Erro ao criar socket");
+        exit(EXIT_FAILURE);
+    }
+
+    struct sockaddr_in serverAddr;
+    memset(&serverAddr, 0, sizeof(serverAddr));
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(port);
+    serverAddr.sin_addr.s_addr = inet_addr(argv[1]);
+
+    RequestMessage request;
+    ResponseMessage response;
     pthread_t threads[NUM_CLIENTS];
+    TestArgs args;
+    args.sockfd = sockfd;
+    args.serverAddr = serverAddr;
+    for (int i = 0; i < NUM_CLIENTS; i++)
+    {
+        if (pthread_create(&(threads[i]), NULL, threadTest, &args) != 0)
+        {
+            logMessage(LOG_WARN, "[THREAD] Falha ao criar thread para cliente");
+        }
+    }
 
     for (int i = 0; i < NUM_CLIENTS; i++)
     {
-        ThreadArgs *args = malloc(sizeof(ThreadArgs));
-        if (!args)
-        {
-            perror("[E] Falha ao alocar memória");
-            continue;
-        }
-
-        strncpy(args->ip, ip, INET_ADDRSTRLEN);
-        args->port = port;
-        args->client_id = i;
-
-        if (pthread_create(&threads[i], NULL, client_thread, args) != 0)
-        {
-            perror("[E] Erro ao criar thread");
-            free(args);
-        }
+        pthread_join(threads[i], NULL);
     }
 
-    for (int i = 0; i < NUM_CLIENTS; i++)
-        pthread_join(threads[i], NULL);
-
-    return EXIT_SUCCESS;
+    close(sockfd);
+    return 0;
 }
