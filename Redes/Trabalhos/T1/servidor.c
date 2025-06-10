@@ -61,7 +61,7 @@ void *autoSaveLoop(void *arg)
             saveGasStationsToFile("data.txt", *stationsList);
             dataChanged = 0;
             pthread_mutex_unlock(&stationsListLock);
-            logMessage(LOG_INFO, "[SERVER][AutoSave] Dados salvos automaticamente\n");
+            logMessage(LOG_INFO, "[SERVER][AutoSave] Dados salvos automaticamente");
         }
     }
     return NULL;
@@ -77,7 +77,7 @@ void receiveClientMessage(int sockfd, struct sockaddr *clientAddress, RequestMes
         ssize_t received = recvfrom(sockfd, request, sizeof(RequestMessage), 0, clientAddress, &addressLength);
         if (received < 0)
         {
-            logMessage(LOG_WARN, "[SERVER] Falha ao receber dados\n");
+            logMessage(LOG_WARN, "[SERVER] Falha ao receber dados");
             continue;
         }
 
@@ -85,13 +85,13 @@ void receiveClientMessage(int sockfd, struct sockaddr *clientAddress, RequestMes
 
         if (request->errorFlag)
         {
-            logMessage(LOG_WARN, "[MSG id=%d] Mensagem corrompida. Enviando NAK\n", request->requestId);
+            logMessage(LOG_WARN, "[MSG id=%d] Mensagem corrompida. Enviando NAK", request->requestId);
             response.messageType = 'N';
         }
         else
         {
-            logMessage(LOG_SUCCESS, "[MSG id=%d] Mensagem válida recebida. Enviando ACK\n", request->requestId);
-            logMessage(LOG_INFO, "[MSG id=%d] Mensagem recebida: %c %d %d %lf %lf\n",
+            logMessage(LOG_SUCCESS, "[MSG id=%d] Mensagem válida recebida. Enviando ACK", request->requestId);
+            logMessage(LOG_INFO, "[MSG id=%d] Mensagem recebida: %c %d %d %lf %lf",
                request->requestId, request->messageType, request->fuelType,
                request->priceOrRadius, request->coordinates[0], request->coordinates[1]);
             response.messageType = 'A';
@@ -110,7 +110,7 @@ void handleInsertRequest(RequestMessage *request, KdTree **dieselTree, KdTree **
     dataChanged = 1;
     releaseLock(request->fuelType);
     pthread_mutex_unlock(&stationsListLock);
-    logMessage(LOG_INFO, "[MSG id=%d] Dados armazenados com sucesso\n", request->requestId);
+    logMessage(LOG_INFO, "[MSG id=%d] Dados armazenados com sucesso", request->requestId);
 }
 
 void handleSearchRequest(RequestMessage *request, ResponseMessage *response, KdTree *dieselTree, KdTree *alcoholTree, KdTree *gasTree)
@@ -123,7 +123,7 @@ void handleSearchRequest(RequestMessage *request, ResponseMessage *response, KdT
     response->requestId = request->requestId;
     if (request->fuelType > 2)
     {
-        logMessage(LOG_WARN, "[MSG id=%d] Tipo de combustível inválido: %d\n", request->requestId, request->fuelType);
+        logMessage(LOG_WARN, "[MSG id=%d] Tipo de combustível inválido: %d", request->requestId, request->fuelType);
         response->minPrice = -1;
         response->coordinates[0] = 0;
         response->coordinates[1] = 0;
@@ -155,14 +155,14 @@ void handleSearchRequest(RequestMessage *request, ResponseMessage *response, KdT
 
 void processRequest(RequestMessage request, ResponseMessage *response, KdTree **dieselTree, KdTree **alcoholTree, KdTree **gasTree, GasStationNode **stationList)
 {
-    logMessage(LOG_INFO, "[MSG id=%d] Mensagem recebida: %c %d %d %lf %lf\n",
+    logMessage(LOG_INFO, "[MSG id=%d] Mensagem recebida: %c %d %d %lf %lf",
                request.requestId, request.messageType, request.fuelType,
                request.priceOrRadius, request.coordinates[0], request.coordinates[1]);
     switch (request.messageType)
     {
     case 'D': handleInsertRequest(&request, dieselTree, alcoholTree, gasTree, stationList); break;
     case 'P': handleSearchRequest(&request, response, *dieselTree, *alcoholTree, *gasTree); break;
-    default: logMessage(LOG_WARN, "[MSG id=%d] Tipo de mensagem desconhecida: %c\n", request.requestId, request.messageType); break;
+    default: logMessage(LOG_WARN, "[MSG id=%d] Tipo de mensagem desconhecida: %c", request.requestId, request.messageType); break;
     }
 }
 
@@ -170,7 +170,7 @@ void sendResponse(int sockfd, struct sockaddr *clientAddress, ResponseMessage *r
 {
     socklen_t len = sizeof(*clientAddress);
     sendto(sockfd, response, sizeof(ResponseMessage), 0, clientAddress, len);
-    logMessage(LOG_INFO, "[MSG id=%d] Resposta enviada: preco=%d\n", response->requestId, response->minPrice);
+    logMessage(LOG_INFO, "[MSG id=%d] Resposta enviada: preco=%d", response->requestId, response->minPrice);
 }
 
 typedef struct {
@@ -211,7 +211,7 @@ int main(int argc, char **argv)
 
     KdTree *dieselTree = NULL, *alcoholTree = NULL, *gasTree = NULL;
     GasStationNode *stationList = loadGasStationsFromFile("data.txt", &dieselTree, &alcoholTree, &gasTree);
-    logMessage(LOG_INFO, "[SERVER] Base de dados carregada\n");
+    logMessage(LOG_INFO, "[SERVER] Base de dados carregada");
 
     int sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sockfd < 0)
@@ -240,7 +240,7 @@ int main(int argc, char **argv)
     }
     pthread_detach(autoSaver);
 
-    logMessage(LOG_INFO, "[SERVER] Servidor escutando na porta %d\n", port);
+    logMessage(LOG_INFO, "[SERVER] Servidor escutando na porta %d", port);
 
     struct sockaddr_in clientAddress;
     RequestMessage requestBuffer;
@@ -250,7 +250,7 @@ int main(int argc, char **argv)
         WorkerArgs *args = malloc(sizeof(WorkerArgs));
         if (!args)
         {
-            logMessage(LOG_WARN, "[THREAD] Falha na alocação de argumentos para thread de atendimento ao cliente\n");
+            logMessage(LOG_WARN, "[THREAD] Falha na alocação de argumentos para thread de atendimento ao cliente");
             continue;
         }
 
@@ -268,7 +268,7 @@ int main(int argc, char **argv)
         pthread_t workerThread;
         if (pthread_create(&workerThread, NULL, handleClientRequest, args) != 0)
         {
-            logMessage(LOG_WARN, "[THREAD] Erro ao criar thread de atendimento ao cliente\n");
+            logMessage(LOG_WARN, "[THREAD] Erro ao criar thread de atendimento ao cliente");
             free(args);
             continue;
         }
